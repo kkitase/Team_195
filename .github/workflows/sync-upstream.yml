@@ -1,52 +1,87 @@
+# =====================================================
+# 学生リポジトリ自動同期ワークフロー
+# =====================================================
+# 概要:
+#   学生のオリジナルリポジトリに新しいコミットがあれば、
+#   このフォーク先リポジトリに自動で取り込みます。
+#   更新があった場合のみ、Discord に詳細を通知します。
+#
+# 動作タイミング:
+#   - 毎時0分 (1時間に1回)
+#   - GitHub Actions 画面から手動実行も可能
+# =====================================================
+
 name: Sync Fork
+
 on:
   schedule:
-    - cron: "0 * * * *"
-  workflow_dispatch:
+    - cron: "0 * * * *"  # 毎時0分に実行
+  workflow_dispatch:      # 手動実行ボタンを有効化
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write  # リポジトリへの書き込み権限
+
     steps:
-      - uses: actions/checkout@v3
+      # ----------------------------------------
+      # ステップ1: リポジトリをチェックアウト
+      # ----------------------------------------
+      - name: Checkout Repository
+        uses: actions/checkout@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
+          fetch-depth: 0  # 全履歴を取得
 
-      - name: Sync with Upstream
+      # ----------------------------------------
+      # ステップ2: 学生のオリジナルリポジトリから同期
+      # ----------------------------------------
+      - name: Sync with Upstream (Student Repository)
         id: sync
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
         with:
-          upstream_sync_repo: spirit0609/Team_195
+          upstream_sync_repo: spirit0609/Team_195  # 学生のリポジトリ
           upstream_sync_branch: main
           target_sync_branch: main
           target_repo_token: ${{ secrets.GITHUB_TOKEN }}
           test_mode: false
 
-      - name: Check for changes and Notify Discord
+      # ----------------------------------------
+      # ステップ3: 更新があれば Discord に通知
+      # ----------------------------------------
+      - name: Notify Discord on Changes
         if: success()
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # 同期前の状態 (Checkout時点のHEAD)
+          # ===== 変数の準備 =====
+          # 同期前のコミットハッシュ（チェックアウト時点）
           PREV_SHA=$(git rev-parse HEAD)
           
-          # 同期後の最新状態を取得
+          # 同期後の最新コミットハッシュを取得
           git fetch origin main --quiet
           NEW_SHA=$(git rev-parse origin/main)
           
+          # ===== 更新有無の判定 =====
           if [ "$PREV_SHA" != "$NEW_SHA" ]; then
-            echo "New commits detected. Sending notification..."
+            echo "📢 新しいコミットを検知しました。Discord に通知を送信します..."
             
-            AUTHOR=$(git log -1 origin/main --format='%an')
-            MESSAGE=$(git log -1 origin/main --format='%s')
+            # ===== コミット情報の抽出 =====
+            AUTHOR=$(git log -1 origin/main --format='%an')    # 更新者名
+            MESSAGE=$(git log -1 origin/main --format='%s')    # コミットメッセージ
+            
+            # 変更されたファイル一覧（最大10件）
             FILES=$(git diff --name-only $PREV_SHA $NEW_SHA | head -n 10 | sed 's/^/- /')
             COUNT=$(git diff --name-only $PREV_SHA $NEW_SHA | wc -l)
-            if [ "$COUNT" -gt 10 ]; then FILES="$FILES"$'\n- ...その他'; fi
             
-            # JSON 構築 (jq を使用して安全にエスケープ)
+            # 10件を超える場合は「...その他」を追記
+            if [ "$COUNT" -gt 10 ]; then
+              FILES="$FILES"$'\n- ...その他'
+            fi
+            
+            # ===== Discord 通知の送信 =====
+            # jq を使って JSON を安全に構築
             payload=$(jq -n \
               --arg title "🚀 【${{ github.repository }}】更新を検知" \
               --arg author "$AUTHOR" \
@@ -66,6 +101,7 @@ jobs:
               }')
             
             curl -H "Content-Type: application/json" -X POST -d "$payload" "$DISCORD_WEBHOOK_URL"
+            echo "✅ Discord への通知が完了しました。"
           else
-            echo "No new commits. Skipping notification."
+            echo "ℹ️ 新しいコミットはありません。通知をスキップします。"
           fi
