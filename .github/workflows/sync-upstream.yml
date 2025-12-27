@@ -66,6 +66,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           PREV_SHA: ${{ steps.pre_sync.outputs.sha }}
+          UPSTREAM_REPO: spirit0609/Team_195
         run: |
           # ===== 変数の準備 =====
           # 同期後の最新コミットハッシュを取得
@@ -79,8 +80,17 @@ jobs:
             echo "📢 新しいコミットを検知しました。Discord に通知を送信します..."
             
             # ===== コミット情報の抽出 =====
-            AUTHOR=$(git log -1 --format='%an')    # 更新者名
-            MESSAGE=$(git log -1 --format='%s')    # コミットメッセージ
+            # マージコミットの場合は2番目の親（upstream側）から情報を取得
+            # 通常コミットの場合はHEADから取得
+            if git rev-parse HEAD^2 >/dev/null 2>&1; then
+              # マージコミットの場合
+              AUTHOR=$(git log -1 HEAD^2 --format='%an')
+              MESSAGE=$(git log -1 HEAD^2 --format='%s')
+            else
+              # 通常のコミットの場合
+              AUTHOR=$(git log -1 --format='%an')
+              MESSAGE=$(git log -1 --format='%s')
+            fi
             
             # 変更されたファイル一覧（最大10件）
             FILES=$(git diff --name-only $PREV_SHA $NEW_SHA | head -n 10 | sed 's/^/- /')
@@ -91,13 +101,17 @@ jobs:
               FILES="$FILES"$'\n- ...その他'
             fi
             
+            # 変更サマリ（追加・削除行数）
+            SUMMARY=$(git diff --stat $PREV_SHA $NEW_SHA | tail -n 1)
+            
             # ===== Discord 通知の送信 =====
             # jq を使って JSON を安全に構築
             payload=$(jq -n \
-              --arg title "🚀 【${{ github.repository }}】更新を検知" \
+              --arg title "🚀 【$UPSTREAM_REPO】更新を検知" \
               --arg author "$AUTHOR" \
               --arg msg "$MESSAGE" \
               --arg files "$FILES" \
+              --arg summary "$SUMMARY" \
               '{
                 embeds: [{
                   title: $title,
@@ -105,7 +119,8 @@ jobs:
                   fields: [
                     { name: "👤 更新者", value: $author, inline: true },
                     { name: "📝 メッセージ", value: $msg },
-                    { name: "📁 変更ファイル", value: ("```\n" + $files + "\n```") }
+                    { name: "📁 変更ファイル", value: ("```\n" + $files + "\n```") },
+                    { name: "🔍 変更サマリ", value: $summary }
                   ],
                   footer: { text: "Kobe Workshop Bot" }
                 }]
